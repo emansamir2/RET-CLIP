@@ -310,7 +310,7 @@ class VisualTransformer(nn.Module):
         x_masked_add = torch.cat([x0, x_masked], axis=1)
         return x_masked_add
 
-    def forward(self, x: torch.Tensor, mask_ratio: float = 0.0):
+    def forward(self, x: torch.Tensor, mask_ratio: float = 0.0, return_all_features=False):
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -324,7 +324,11 @@ class VisualTransformer(nn.Module):
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        x = self.ln_post(x[:, 0, :])
+        # Optionally return all features before projection
+        if return_all_features:
+            return x
+
+        x = self.ln_post(x[:, 0, :])  # Only CLS token
         if self.proj is not None:
             x = x @ self.proj
         return x
@@ -485,20 +489,20 @@ class CLIP(nn.Module):
     def dtype(self):
         return self.visual.conv1.weight.dtype
 
-    def encode_image(self, img_l, img_r, mask_ratio=0):
+    def encode_image(self, img_l, img_r, mask_ratio=0, return_all_features=False):
         if img_r is None:
             if isinstance(self.visual, ModifiedResNet):
                 # mask_ratio > 0 (FLIP strategy) is currently only implemented for VisualTransformer.
                 vision_feature = self.visual(img_l.type(self.dtype))
                 return vision_feature
-            vision_feature = self.visual(img_l.type(self.dtype), mask_ratio)
+            vision_feature = self.visual(img_l.type(self.dtype), mask_ratio, return_all_features=True)
             return vision_feature
         if img_l is None:
             if isinstance(self.visual, ModifiedResNet):
                 # mask_ratio > 0 (FLIP strategy) is currently only implemented for VisualTransformer.
                 vision_feature = self.visual(img_r.type(self.dtype))
                 return vision_feature
-            vision_feature = self.visual(img_r.type(self.dtype), mask_ratio)
+            vision_feature = self.visual(img_r.type(self.dtype), mask_ratio, return_all_features=True)
             return vision_feature
         if isinstance(self.visual, ModifiedResNet):
             # mask_ratio > 0 (FLIP strategy) is currently only implemented for VisualTransformer.
@@ -509,8 +513,8 @@ class CLIP(nn.Module):
 
             return self.global_feature_mapping(vision_feature), self.single_feature_mapping(
                 left_feature), self.single_feature_mapping(right_feature)
-        left_feature = self.visual(img_l.type(self.dtype), mask_ratio)
-        right_feature = self.visual(img_r.type(self.dtype), mask_ratio)
+        left_feature = self.visual(img_l.type(self.dtype), mask_ratio, return_all_features=True)
+        right_feature = self.visual(img_r.type(self.dtype), mask_ratio, return_all_features=True)
         vision_feature = torch.cat(
             (left_feature, right_feature), dim=1)
 
