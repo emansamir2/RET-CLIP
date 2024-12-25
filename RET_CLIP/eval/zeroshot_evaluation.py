@@ -8,8 +8,10 @@ import argparse
 from pathlib import Path
 import json
 from tqdm import tqdm
-
+from torchinfo import summary
 import torch
+import sys
+sys.path.append(".")
 
 from RET_CLIP.clip.model import convert_weights, CLIP
 from RET_CLIP.clip import tokenize
@@ -109,8 +111,14 @@ def zero_shot_classifier(model, classnames, templates, args):
         zeroshot_weights = []
         for classname in tqdm(classnames):
             texts = [_preprocess_text(template(classname)) for template in templates]  # format with class
-            texts = tokenize(texts, context_length=args.context_length).to(args.gpu)  # tokenize
-            class_embeddings = model(None, texts)
+            # texts = tokenize(texts, context_length=args.context_length).to(args.gpu)  # tokenize
+            # class_embeddings = model(None, texts)
+
+            text_ids = tokenize(texts, context_length=args.context_length).to(args.gpu)  # tokenize
+            # model(texts) returns a tuple of (text, text_left, text_right).
+            # Since we provide the input image as img_l, we choose text_left as the class embeddings.
+            class_embeddings = model(None, None, text_ids)[1]
+
             class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)
             class_embedding = class_embeddings.mean(dim=0)
             class_embedding /= class_embedding.norm()
@@ -136,7 +144,7 @@ def run(model, classifier, dataloader, args):
             total_targets.append(target)
 
             # predict
-            image_features = model(images, None)
+            image_features = model(images, None, None)
             image_features /= image_features.norm(dim=-1, keepdim=True)
             logits = (100.0 * image_features @ classifier).softmax(dim=-1)
             total_logits.append(logits)
@@ -215,19 +223,31 @@ if __name__ == "__main__":
     # Map model to be loaded to specified single gpu.
     loc = "cuda:{}".format(args.gpu)
     checkpoint = torch.load(args.resume, map_location='cpu')
-    start_epoch = checkpoint["epoch"]
-    sd = checkpoint["state_dict"]
+    # start_epoch = checkpoint["epoch"]
+    # sd = checkpoint["state_dict"]
+    sd = checkpoint
     if next(iter(sd.items()))[0].startswith('module'):
         sd = {k[len('module.'):]: v for k, v in sd.items() if "bert.pooler" not in k}
     model.load_state_dict(sd)
+    # print(
+    #     f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']} @ {checkpoint['step']} steps)"
+    # )
     print(
-        f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']} @ {checkpoint['step']} steps)"
+        f"=> loaded checkpoint '{args.resume}'"
     )
 
     # Compute ensembled class embeddings
     print('Building zero-shot classifier')
 
     model.eval()
+
+    print(summary(model))
+    for images, labels in data[args.dataset].dataloader:
+        images = images.cuda(args.gpu)
+        with torch.no_grad():
+            visual_repr = model.visual(images)
+            print("Visual representation shape:", visual_repr.shape)
+            print("Visual representation:", visual_repr)
 
     f = open(args.label_file, "r", encoding="utf8")
     classnames = [line.strip() for line in f.readlines()]
@@ -257,7 +277,7 @@ if __name__ == "__main__":
             json.loads(json.dumps(data), parse_float=lambda x: round(float(x), prec))
         )
 
-    print(logits.size())
+    # print(logits.size())
     output_dict = {
         "model_name": "CN-CLIP-" + args.vision_model,
         "dataset_name": args.dataset,
