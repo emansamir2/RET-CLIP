@@ -323,11 +323,13 @@ class VisualTransformer(nn.Module):
         x = self.ln_pre(x)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
         # Optionally return all features before projection
         if return_all_features:
+            x=self.ln_post(x)
+            x = x.permute(1, 0, 2)  # LND -> NLD
             return x
-
+            
+        x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_post(x[:, 0, :])  # Only CLS token
         if self.proj is not None:
             x = x @ self.proj
